@@ -3,12 +3,12 @@
     "default-user-agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_9_3) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/35.0.1916.47 Safari/537.36"
   },
   "classes": {
-    "steam": {
+    "Steam": {
       "arguments": [
         "api_key"
       ],
       "methods": {
-        "schema": {
+        "get_schema": {
           "url": "http://api.steampowered.com/IEconItems_440/GetSchema/v0001/",
           "headers": {
             "User-Agent": "$default-user-agent"
@@ -18,6 +18,37 @@
             "language": "en_US"
           },
           "refresh_method": "refresh_schema"
+        },
+        "fetch_items": {
+          "url": "",
+          "arguments": [
+            "id"
+          ],
+          "headers": {
+            "User-Agent": "$default-user-agent"
+          },
+          "data": {
+            "key": "@api_key",
+            "SteamID": "@id"
+          }
+        }
+      }
+    },
+    "Backpack": {
+      "arguments": [
+        "api_key"
+      ],
+      "methods": {
+        "get_prices": {
+          "url": "",
+          "headers": {
+            "User-Agent": "$default-user-agent"
+          },
+          "data": {
+            "key": "@api_key",
+            "format": "json",
+            "appid": "440"
+          }
         }
       }
     }

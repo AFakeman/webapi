@@ -4,15 +4,25 @@ import json
 
 class RemoteOpener:
     'Function-like object, opens url with provided data and headers'
-    def __init__(self, url, data = None, headers = None):
-        if data:
-            url = "{0}?{1}".format(url, urllib.parse.urlencode(data))
-        if headers:
+    def __init__(self, url, data=None, headers=None, method="GET", data_arguments=None, header_arguments=None):
+        """ data_arguments: kwarg->data member\n
+            header_arguments: kwarg->headers member"""
+        if not data:
+            data = {}
+        if not headers:
             headers = {}
-        self.request = urllib.request.Request(url, headers=headers)
-
-    def __call__(self):
-        return urllib.request.urlopen(self.request)
+        self.data = data.copy()
+        self.headers = headers.copy()
+        self.data_args = data_arguments.copy()
+        self.header_args = header_arguments.copy()
+        self.method = method
+    def __call__(self, **kwargs):
+        for arg, member in self.data_args.items():
+            self.data[member] = kwargs[arg]
+        for arg, member in self.header_args.items():
+            self.headers[member] = kwargs[arg]
+        request = urllib.request(self.url, headers=self.headers, data=self.data, method=self.method)
+        return urllib.request.urlopen(request)
 
 class RefreshMethod:
     'Method that is used to fetch new data for a provided CacheMethod'
@@ -20,8 +30,8 @@ class RefreshMethod:
         self.method_name = method_name
         self.cache = cache
         self.openers = openers
-    def __call__(self):
-        self.cache[self.method_name] = self.openers[self.method_name]()
+    def __call__(self, **kwargs):
+        self.cache[self.method_name] = self.openers[self.method_name](**kwargs)
 
 class CacheMethod:
     """Method that is used as a proxy for opening urls like DirectMethod,
@@ -30,25 +40,25 @@ class CacheMethod:
         self.method_name = method_name
         self.cache = cache
         self.refresh_method = refresh_method
-    def __call__(self):
+    def __call__(self, **kwargs):
         if not self.method_name in self.cache:
-            self.refresh_method()
-        return self.cache[self.method_name]
+            self.refresh_method(**kwargs)
+        return self.cache[self.method_name]#!!!
 
 class DirectMethod:
     "Method that is used as a proxy for opening urls"
     def __init__(self, method_name, openers):
         self.method_name = method_name
         self.openers = openers
-    def __call__(self):
-        return self.openers[self.method_name]()
+    def __call__(self, **kwargs):
+        return self.openers[self.method_name](**kwargs)
 
 class JSONParseMethod:
     "Used as a public function in API, decodes json provided by method"
     def __init__(self, method):
         self.method = method
-    def __call__(self):
-        return json.loads(self.method().read().decode("UTF-8"), "UTF-8")
+    def __call__(self, **kwargs):
+        return json.loads(self.method(**kwargs).read().decode("UTF-8"), "UTF-8")
 
 def template_init (self, **kwargs):
     """Templated initializer, accepts all arguments from config, and only them,
@@ -67,7 +77,7 @@ def template_init (self, **kwargs):
         if not found:
             raise ValueError("Unknown kwarg: " + key)
     for method_name, method in self.methods.items():
-        self.openers[method_name] = RemoteOpener(url=method["url"], headers=method["headers"], data=method["data"])
+        self.openers[method_name] = RemoteOpener(url=method["url"], headers=method["headers"], data=method["data"], header_arguments=self.header_args, data_arguments=self.data_args)
         if method["refresh_method"]:
             refresh_method = RefreshMethod(method_name=method_name, cache=self.cache, openers=self.openers)
             cache_method = CacheMethod(method_name=method_name, cache=self.cache, refresh_method=refresh_method)
@@ -77,8 +87,23 @@ def template_init (self, **kwargs):
             direct_method = DirectMethod(method_name=method_name, openers=self.openers)
             self.__dict__[method_name] = JSONParseMethod(direct_method)
 
+def process_payload_args(payload, static_vars, payload_init_vars, payload_rt_vars):
+    payload_rt_args = {}
+    payload_init_args = {}
+    for arg, value in payload.items():
+        if value.startswith("$"):
+            var = value[1:]
+            payload[arg] = static_vars[var]
+        if value.startswith("@"):
+            var = value[1:]
+            if var in payload_rt_vars: #  Runtime scope has higher priority
+                header_rt_args[var] = header
+            else:
+                header_init_args[var] = header
+
 
 class WebApi:
+    'Class that contains all web-api classes from config'
     def __init__(self, config):
         self.classes = {}
         with open(config, "r") as f:
@@ -96,9 +121,9 @@ class WebApi:
                 fields = {}
 
             if "arguments" in class_:
-                arguments = class_["arguments"]
+                class_arguments = class_["arguments"]
             else:
-                arguments = {}
+                class_arguments = []
 
             for method_name, method in class_["methods"].items():
                 if method_name in method_set:
@@ -106,13 +131,19 @@ class WebApi:
                 else:
                     method_set.add(method_name)
 
+                if "arguments" in method:
+                    method_args = method["arguments"]
+                else:
+                    method_args = []
+
                 url = method["url"]
 
                 if "headers" in method:
                     headers = method["headers"]
                 else:
-                    headers = {}
-                header_args = {}
+                    headers = []
+                header_init_args = {}
+                header_rt_args = {}
                 for header, value in headers.items():
                     if value.startswith("$"):
                         var = value[1:]
@@ -121,13 +152,18 @@ class WebApi:
                         else:
                             headers[header] = class_["fields"][var]
                     if value.startswith("@"):
-                        header_args[value[1:]] = header
+                        var = value[1:]
+                        if var in method_args:
+                            header_rt_args[var] = header
+                        else:
+                            header_init_args[var] = header
 
                 if "data" in method:
                     data = method["data"]
                 else:
                     data = {}
-                data_args = {}
+                data_init_args = {}
+                data_rt_args = {}
                 for key, value in data.items():
                     if value.startswith("$"):
                         var = value[1:]
@@ -136,7 +172,7 @@ class WebApi:
                         else:
                             data[key] = class_["fields"][var]
                     if value.startswith("@"):
-                        data_args[value[1:]] = key
+                        data_init_args[value[1:]] = key
 
                 if "refresh_method" in method:
                     refresh_method = method["refresh_method"]
@@ -151,12 +187,14 @@ class WebApi:
                 methods[method_name] = {
                     "url": url,
                     "data": data,
-                    "data_args": data_args,
+                    "data_args": data_init_args,
                     "headers": headers,
-                    "header_args": header_args,
+                    "header_args": header_init_args,
                     "refresh_method": refresh_method
                 }
-            self.classes[class_name] = type(class_name, (object,), {
+            if class_name in self.__dict__:
+                raise NameError("Class already exists or has reserved name: " + class_name)
+            self.__dict__[class_name] = type(class_name, (object,), {
                 "methods": methods,
                 "__init__": template_init
             })
